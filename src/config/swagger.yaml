@@ -1,34 +1,337 @@
 openapi: 3.0.0
 info:
   title: Task Management API
+  description: |
+    A RESTful API for managing tasks with user authentication and authorization via Keycloak.
+
+    ### Authentication Flow
+    This API uses Keycloak for JWT-based authentication and authorization. All endpoints require a valid JWT token issued by Keycloak, included in the `Authorization: Bearer <token>` header. Mutating endpoints (POST, PUT, DELETE) also require a CSRF token in the `X-CSRF-Token` header.
+
+    #### Steps to Authenticate
+    1. **Obtain a JWT Token from Keycloak**:
+       - Use Keycloak's token endpoint to authenticate and obtain an access token.
+       - For client credentials (machine-to-machine):
+         - Send a POST request to `http://localhost:8080/realms/task-management/protocol/openid-connect/token`.
+         - Content-Type: `application/x-www-form-urlencoded`
+         - Body: `grant_type=client_credentials&client_id=task-api&client_secret=<your_client_secret>`
+         - Example:
+           ```bash
+           curl -X POST http://localhost:8080/realms/task-management/protocol/openid-connect/token \
+             -H "Content-Type: application/x-www-form-urlencoded" \
+             -d "grant_type=client_credentials&client_id=task-api&client_secret=<your_client_secret>"
+           ```
+         - Response: `{ "access_token": "<jwt_token>", ... }`
+       - For user login (interactive users):
+         - Use Keycloak’s login page or an OAuth2 flow (e.g., authorization code flow) to authenticate users and obtain a token.
+         - Example token request after obtaining an authorization code:
+           ```bash
+           curl -X POST http://localhost:8080/realms/task-management/protocol/openid-connect/token \
+             -H "Content-Type: application/x-www-form-urlencoded" \
+             -d "grant_type=authorization_code&client_id=task-api&client_secret=<your_client_secret>&code=<auth_code>&redirect_uri=<your_redirect_uri>"
+           ```
+
+    2. **Obtain a CSRF Token**:
+       - Call `GET /csrf-token` with the JWT to retrieve a CSRF token for mutating requests.
+       - Example:
+         ```bash
+         curl -H "Authorization: Bearer <jwt_token>" http://localhost:3000/csrf-token
+         ```
+       - Response: `{ "csrfToken": "<csrf_token>" }`
+
+    3. **Make API Requests**:
+       - Include the JWT in the `Authorization` header for all requests.
+       - For POST, PUT, and DELETE requests, include the CSRF token in the `X-CSRF-Token` header.
+       - Example (create a task):
+         ```bash
+         curl -X POST http://localhost:3000/tasks \
+           -H "Authorization: Bearer <jwt_token>" \
+           -H "X-CSRF-Token: <csrf_token>" \
+           -H "Content-Type: application/json" \
+           -d '{"title":"Test Task","description":"Test Description","status":"pending","notes":"Test Notes"}'
+         ```
+
+    #### Notes
+    - Replace `<your_client_secret>` with the client secret from your Keycloak client configuration.
+    - Ensure the Keycloak server is running at `http://localhost:8080` (or your configured `KEYCLOAK_URL`).
+    - Tokens expire based on Keycloak’s configuration; refresh tokens may be used to obtain new access tokens.
+    - CSRF tokens are session-specific and must be fetched before each mutating request.
   version: 1.0.0
+servers:
+  - url: http://localhost:3000
+    description: Local development server
 paths:
   /tasks:
     post:
-      summary: Create a task
+      summary: Create a new task
+      description: Creates a task for the authenticated user. Requires a valid JWT and CSRF token.
       security:
         - bearerAuth: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                title: { type: string }
-                description: { type: string }
-                status: { type: string, enum: [pending, in_progress, completed] }
-                notes: { type: string }
+              $ref: '#/components/schemas/TaskInput'
       responses:
-        '201': { description: Task created }
+        '201':
+          description: Task created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized (invalid or missing JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      headers:
+        X-CSRF-Token:
+          description: CSRF token required for this request
+          schema:
+            type: string
+          required: true
     get:
       summary: Get all tasks
+      description: Retrieves all tasks for the authenticated user. Requires a valid JWT.
       security:
         - bearerAuth: []
       responses:
-        '200': { description: List of tasks }
+        '200':
+          description: List of tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Task'
+        '401':
+          description: Unauthorized (invalid or missing JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /tasks/{id}:
+    get:
+      summary: Get a task by ID
+      description: Retrieves a specific task by ID for the authenticated user. Requires a valid JWT.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: The task ID
+      responses:
+        '200':
+          description: Task details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '401':
+          description: Unauthorized (invalid or missing JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      summary: Update a task
+      description: Updates a specific task by ID for the authenticated user. Requires a valid JWT and CSRF token.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: The task ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskInput'
+      responses:
+        '200':
+          description: Task updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized (invalid or missing JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      headers:
+        X-CSRF-Token:
+          description: CSRF token required for this request
+          schema:
+            type: string
+          required: true
+    delete:
+      summary: Delete a task
+      description: Deletes a specific task by ID for the authenticated user. Requires a valid JWT and CSRF token.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: The task ID
+      responses:
+        '204':
+          description: Task deleted successfully
+        '401':
+          description: Unauthorized (invalid or missing JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      headers:
+        X-CSRF-Token:
+          description: CSRF token required for this request
+          schema:
+            type: string
+          required: true
+  /csrf-token:
+    get:
+      summary: Get CSRF token
+      description: Retrieves a CSRF token for use in mutating requests (POST, PUT, DELETE). Requires a valid JWT.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: CSRF token retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  csrfToken:
+                    type: string
+                    description: The CSRF token to include in the X-CSRF-Token header
+        '401':
+          description: Unauthorized (invalid or missing JWT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Session not initialized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: JWT token issued by Keycloak
+  schemas:
+    Task:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: The task ID
+        title:
+          type: string
+          description: The task title
+        description:
+          type: string
+          description: The task description
+          nullable: true
+        status:
+          type: string
+          enum: [pending, in_progress, completed]
+          description: The task status
+        notes:
+          type: string
+          description: Encrypted notes for the task
+          nullable: true
+        userId:
+          type: integer
+          description: The ID of the user who owns the task
+        createdAt:
+          type: string
+          format: date-time
+          description: Task creation timestamp
+        updatedAt:
+          type: string
+          format: date-time
+          description: Task update timestamp
+      required:
+        - id
+        - title
+        - status
+        - userId
+        - createdAt
+        - updatedAt
+    TaskInput:
+      type: object
+      properties:
+        title:
+          type: string
+          description: The task title
+        description:
+          type: string
+          description: The task description
+          nullable: true
+        status:
+          type: string
+          enum: [pending, in_progress, completed]
+          description: The task status
+        notes:
+          type: string
+          description: Notes to be encrypted
+          nullable: true
+      required:
+        - title
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+      required:
+        - error
